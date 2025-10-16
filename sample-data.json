@@ -1,0 +1,18 @@
+[
+  {"x": 0, "y": 1.5, "z": 0, "category": "A"},
+  {"x": 1, "y": 2.3, "z": 1, "category": "B"},
+  {"x": 2, "y": 1.8, "z": 2, "category": "A"},
+  {"x": 3, "y": 3.1, "z": 3, "category": "C"},
+  {"x": 4, "y": 2.7, "z": 4, "category": "B"},
+  {"x": 5, "y": 3.5, "z": 5, "category": "A"},
+  {"x": 6, "y": 2.9, "z": 6, "category": "C"},
+  {"x": 7, "y": 4.2, "z": 7, "category": "B"},
+  {"x": 8, "y": 3.8, "z": 8, "category": "A"},
+  {"x": 9, "y": 4.5, "z": 9, "category": "C"},
+  {"x": 10, "y": 2.1, "z": 10, "category": "A"},
+  {"x": 11, "y": 3.6, "z": 11, "category": "B"},
+  {"x": 12, "y": 4.0, "z": 12, "category": "C"},
+  {"x": 13, "y": 3.2, "z": 13, "category": "A"},
+  {"x": 14, "y": 4.8, "z": 14, "category": "B"},
+  {"x": 15, "y": 3.9, "z": 15, "category": "C"}
+]
