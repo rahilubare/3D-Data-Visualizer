@@ -6,17 +6,22 @@ import {
   ChevronUp, Layers, Play, Pause, FastForward, Settings, ZoomIn,
   Tag, Square, Repeat, Activity
 } from 'lucide-react';
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
 
 const DataVisualizer3D = () => {
+  // Refs
   const mountRef = useRef(null);
   const sceneRef = useRef(null);
   const cameraRef = useRef(null);
   const rendererRef = useRef(null);
   const meshRef = useRef(null);
+  const labelRendererRef = useRef(null);
   const animationIdRef = useRef(null);
   const fileInputRef = useRef(null);
-  const selectionBoxRef = useRef(null);
+  const raycasterRef = useRef(new THREE.Raycaster());
+  const mouseRef = useRef({ x: 0, y: 0 });
 
+  // State
   const [isRotating, setIsRotating] = useState(true);
   const [dataMode, setDataMode] = useState('wave');
   const [vizMode, setVizMode] = useState('surface');
@@ -45,9 +50,6 @@ const DataVisualizer3D = () => {
   const [timeSeriesData, setTimeSeriesData] = useState(null);
   const [showTimeControls, setShowTimeControls] = useState(false);
   const [showLabels, setShowLabels] = useState(false);
-  const [isSelecting, setIsSelecting] = useState(false);
-  const [selectedPoints, setSelectedPoints] = useState([]);
-  const [selectionStart, setSelectionStart] = useState(null);
   const [compareMode, setCompareMode] = useState(false);
   const [secondDataset, setSecondDataset] = useState(null);
   const [transform, setTransform] = useState({
@@ -60,9 +62,7 @@ const DataVisualizer3D = () => {
     interpolate: false
   });
 
-  const mouseRef = useRef({ x: 0, y: 0 });
-  const raycasterRef = useRef(new THREE.Raycaster());
-
+  // Category colors
   const categoryColors = [
     '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
     '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B88B', '#52B788'
@@ -775,11 +775,23 @@ const DataVisualizer3D = () => {
 
   const addDataLabels = (scene, data) => {
     selectedPoints.forEach(point => {
-      const geometry = new THREE.SphereGeometry(0.15, 8, 8);
-      const material = new THREE.MeshBasicMaterial({ color: 0xffff00 });
-      const marker = new THREE.Mesh(geometry, material);
-      marker.position.set((point.x - 25) * 0.2, point.value + 0.5, (point.z - 25) * 0.2);
-      scene.add(marker);
+      const labelDiv = document.createElement('div');
+      labelDiv.className = 'label';
+      labelDiv.textContent = point.value?.toFixed(2);
+      labelDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.7)';
+      labelDiv.style.color = 'white';
+      labelDiv.style.padding = '4px 8px';
+      labelDiv.style.borderRadius = '4px';
+      labelDiv.style.fontSize = '12px';
+      labelDiv.style.pointerEvents = 'none';
+
+      const label = new CSS2DObject(labelDiv);
+      label.position.set(
+        (point.x - 25) * 0.2,
+        point.value + 0.5,
+        (point.z - 25) * 0.2
+      );
+      scene.add(label);
     });
   };
 
@@ -794,10 +806,14 @@ const DataVisualizer3D = () => {
   // --- useEffect Hooks ---
   useEffect(() => {
     if (!mountRef.current) return;
+
+    // Scene setup
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0a0a0a);
     scene.fog = new THREE.Fog(0x0a0a0a, 10, 50);
     sceneRef.current = scene;
+
+    // Camera setup
     const camera = new THREE.PerspectiveCamera(
       75,
       mountRef.current.clientWidth / mountRef.current.clientHeight,
@@ -807,11 +823,24 @@ const DataVisualizer3D = () => {
     camera.position.set(15, 12, 15);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
+
+    // Renderer setup
     const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
     renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
     renderer.setPixelRatio(window.devicePixelRatio);
     mountRef.current.appendChild(renderer.domElement);
     rendererRef.current = renderer;
+
+    // Label renderer setup
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+    labelRenderer.domElement.style.position = 'absolute';
+    labelRenderer.domElement.style.top = '0';
+    labelRenderer.domElement.style.pointerEvents = 'none';
+    mountRef.current.appendChild(labelRenderer.domElement);
+    labelRendererRef.current = labelRenderer;
+
+    // Lights
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     scene.add(ambientLight);
     const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
@@ -823,11 +852,18 @@ const DataVisualizer3D = () => {
     const pointLight2 = new THREE.PointLight(0xff00ff, 0.5);
     pointLight2.position.set(10, 5, 10);
     scene.add(pointLight2);
+
+    // Grid
     const gridHelper = new THREE.GridHelper(30, 30, 0x444444, 0x222222);
     scene.add(gridHelper);
+
+    // Initial visualization
     createVisualization(scene, dataMode, vizMode);
+
+    // Mouse controls
     let isDragging = false;
     let previousMousePosition = { x: 0, y: 0 };
+
     const onMouseDown = (e) => {
       if (e.button === 0) {
         isDragging = true;
@@ -838,17 +874,18 @@ const DataVisualizer3D = () => {
         raycasterRef.current.setFromCamera(mouseRef.current, camera);
         if (meshRef.current) {
           const intersects = raycasterRef.current.intersectObject(meshRef.current, true);
-          if (intersects.length > 0 && intersects[0].object.userData.point) {
+          if (intersects.length > 0 && intersects[0].object.userData?.point) {
             setClickedPoint(intersects[0].object.userData.point);
           }
         }
       }
     };
+
     const onMouseMove = (e) => {
       const rect = renderer.domElement.getBoundingClientRect();
       mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
-      if (isDragging && !isSelecting) {
+      if (isDragging) {
         const deltaX = e.clientX - previousMousePosition.x;
         const deltaY = e.clientY - previousMousePosition.y;
         camera.position.x += deltaX * 0.05 * Math.cos(camera.rotation.y);
@@ -858,9 +895,11 @@ const DataVisualizer3D = () => {
       }
       previousMousePosition = { x: e.clientX, y: e.clientY };
     };
+
     const onMouseUp = () => {
       isDragging = false;
     };
+
     const onWheel = (e) => {
       e.preventDefault();
       const delta = e.deltaY * 0.01;
@@ -868,10 +907,13 @@ const DataVisualizer3D = () => {
       camera.getWorldDirection(direction);
       camera.position.addScaledVector(direction, delta);
     };
+
     renderer.domElement.addEventListener('mousedown', onMouseDown);
     renderer.domElement.addEventListener('mousemove', onMouseMove);
     renderer.domElement.addEventListener('mouseup', onMouseUp);
     renderer.domElement.addEventListener('wheel', onWheel);
+
+    // Animation loop
     const animate = () => {
       animationIdRef.current = requestAnimationFrame(animate);
       if (isRotating) {
@@ -879,7 +921,7 @@ const DataVisualizer3D = () => {
         camera.position.z = Math.sin(Date.now() * 0.0003) * 15;
         camera.lookAt(0, 0, 0);
       }
-      if (meshRef.current && meshRef.current.geometry && meshRef.current.geometry.attributes && meshRef.current.geometry.attributes.position) {
+      if (meshRef.current?.geometry?.attributes?.position) {
         raycasterRef.current.setFromCamera(mouseRef.current, camera);
         const intersects = raycasterRef.current.intersectObject(meshRef.current, true);
         if (intersects.length > 0) {
@@ -894,15 +936,23 @@ const DataVisualizer3D = () => {
         }
       }
       renderer.render(scene, camera);
+      if (labelRendererRef.current) {
+        labelRendererRef.current.render(scene, camera);
+      }
     };
     animate();
+
+    // Handle resize
     const handleResize = () => {
       if (!mountRef.current) return;
       camera.aspect = mountRef.current.clientWidth / mountRef.current.clientHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
+      labelRendererRef.current?.setSize(mountRef.current.clientWidth, mountRef.current.clientHeight);
     };
     window.addEventListener('resize', handleResize);
+
+    // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize);
       renderer.domElement.removeEventListener('mousedown', onMouseDown);
@@ -915,6 +965,9 @@ const DataVisualizer3D = () => {
       if (mountRef.current && renderer.domElement) {
         mountRef.current.removeChild(renderer.domElement);
       }
+      if (mountRef.current && labelRendererRef.current?.domElement) {
+        mountRef.current.removeChild(labelRendererRef.current.domElement);
+      }
       renderer.dispose();
     };
   }, []);
@@ -923,9 +976,8 @@ const DataVisualizer3D = () => {
     if (sceneRef.current) {
       createVisualization(sceneRef.current, dataMode, vizMode);
     }
-  }, [dataMode, vizMode, filterRange, searchValue, currentData, selectedCategories, currentTimeIndex, transform, showLabels, selectedPoints]);
+  }, [dataMode, vizMode, filterRange, searchValue, currentData, selectedCategories, currentTimeIndex, transform, showLabels]);
 
-  // Time-series animation
   useEffect(() => {
     if (!isAnimating || !timeSeriesData) return;
     const interval = setInterval(() => {
@@ -1531,6 +1583,141 @@ const DataVisualizer3D = () => {
           </button>
         </div>
       </div>
+
+      {/* Column Mapping Modal */}
+      {showMapping && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 bg-gray-900/95 backdrop-blur-md rounded-lg p-6 border border-gray-700 shadow-2xl w-96 max-h-[90vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-white font-bold text-lg flex items-center gap-2">
+              <Grid size={20} className="text-cyan-400" />
+              Map Columns to Axes
+            </h3>
+            <button
+              onClick={() => setShowMapping(false)}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <div className="space-y-4">
+            <div>
+              <label className="text-gray-300 text-sm mb-2 block">X Axis</label>
+              <select
+                value={columnMapping.x}
+                onChange={(e) => setColumnMapping(prev => ({ ...prev, x: e.target.value }))}
+                className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
+              >
+                <option value="">Select column...</option>
+                {availableColumns.map(col => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-gray-300 text-sm mb-2 block">Y Axis (Value/Height)</label>
+              <select
+                value={columnMapping.y}
+                onChange={(e) => setColumnMapping(prev => ({ ...prev, y: e.target.value }))}
+                className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
+              >
+                <option value="">Select column...</option>
+                {availableColumns.map(col => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="text-gray-300 text-sm mb-2 block">Z Axis</label>
+              <select
+                value={columnMapping.z}
+                onChange={(e) => setColumnMapping(prev => ({ ...prev, z: e.target.value }))}
+                className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
+              >
+                <option value="">Select column...</option>
+                {availableColumns.map(col => (
+                  <option key={col} value={col}>
+                    {col}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {/* Category Column Selector */}
+            {categoricalColumns.length > 0 && (
+              <div className="pt-3 border-t border-gray-700">
+                <label className="text-gray-300 text-sm mb-2 block flex items-center gap-2">
+                  <Layers size={16} className="text-pink-400" />
+                  Category Column (Optional)
+                </label>
+                <select
+                  value={columnMapping.category}
+                  onChange={(e) => setColumnMapping(prev => ({ ...prev, category: e.target.value }))}
+                  className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
+                >
+                  <option value="">None</option>
+                  {categoricalColumns.map(col => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Select a column to group data by categories
+                </p>
+              </div>
+            )}
+            {/* Time Column Selector */}
+            {timeColumns.length > 0 && (
+              <div className="pt-3 border-t border-gray-700">
+                <label className="text-gray-300 text-sm mb-2 block flex items-center gap-2">
+                  <Play size={16} className="text-green-400" />
+                  Time Column (For Animation)
+                </label>
+                <select
+                  value={columnMapping.time}
+                  onChange={(e) => setColumnMapping(prev => ({ ...prev, time: e.target.value }))}
+                  className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
+                >
+                  <option value="">None</option>
+                  {timeColumns.map(col => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Select a time column to enable animation
+                </p>
+              </div>
+            )}
+            <div className="bg-gray-800 rounded p-3 text-xs text-gray-400">
+              <p className="mb-1">📊 Available columns:</p>
+              <p className="font-mono">{availableColumns.join(', ')}</p>
+              {categoricalColumns.length > 0 && (
+                <>
+                  <p className="mb-1 mt-2">🏷️ Categorical columns:</p>
+                  <p className="font-mono text-pink-400">{categoricalColumns.join(', ')}</p>
+                </>
+              )}
+              {timeColumns.length > 0 && (
+                <>
+                  <p className="mb-1 mt-2">⏱️ Time columns:</p>
+                  <p className="font-mono text-green-400">{timeColumns.join(', ')}</p>
+                </>
+              )}
+            </div>
+            <button
+              onClick={applyMapping}
+              className="w-full px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white rounded font-medium transition-all"
+            >
+              Apply Mapping
+            </button>
+          </div>
+        </div>
+      )}
 
       <div ref={mountRef} className="w-full h-full" />
       <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-gray-950 to-transparent pointer-events-none" />
