@@ -1,6 +1,23 @@
 import React, { useState, useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { Upload, RotateCcw, Maximize2, Info, Download, Filter, BarChart3, Sparkles, TrendingUp, Grid, Share2, FileJson, X } from 'lucide-react';
+import {
+  Upload,
+  RotateCcw,
+  Maximize2,
+  Info,
+  Download,
+  Filter,
+  BarChart3,
+  Sparkles,
+  TrendingUp,
+  Grid,
+  Share2,
+  FileJson,
+  X,
+  ChevronDown,
+  ChevronUp,
+  Layers
+} from 'lucide-react';
 
 const DataVisualizer3D = () => {
   const mountRef = useRef(null);
@@ -16,17 +33,27 @@ const DataVisualizer3D = () => {
   const [vizMode, setVizMode] = useState('surface');
   const [hoveredPoint, setHoveredPoint] = useState(null);
   const [uploadedData, setUploadedData] = useState(null);
-  const [columnMapping, setColumnMapping] = useState({ x: '', y: '', z: '' });
+  const [columnMapping, setColumnMapping] = useState({ x: '', y: '', z: '', category: '' });
   const [availableColumns, setAvailableColumns] = useState([]);
+  const [categoricalColumns, setCategoricalColumns] = useState([]);
   const [showMapping, setShowMapping] = useState(false);
   const [statistics, setStatistics] = useState(null);
+  const [categoryStats, setCategoryStats] = useState(null);
   const [filterRange, setFilterRange] = useState({ min: -Infinity, max: Infinity });
   const [searchValue, setSearchValue] = useState('');
   const [showFilters, setShowFilters] = useState(false);
+  const [showCategoryPanel, setShowCategoryPanel] = useState(false);
+  const [selectedCategories, setSelectedCategories] = useState([]);
+  const [expandedCategory, setExpandedCategory] = useState(null);
   const [currentData, setCurrentData] = useState([]);
 
   const mouseRef = useRef({ x: 0, y: 0 });
   const raycasterRef = useRef(new THREE.Raycaster());
+
+  const categoryColors = [
+    '#FF6B6B', '#4ECDC4', '#45B7D1', '#FFA07A', '#98D8C8',
+    '#F7DC6F', '#BB8FCE', '#85C1E2', '#F8B88B', '#52B788'
+  ];
 
   // --- Helper Functions ---
   const generateData = (mode) => {
@@ -59,9 +86,21 @@ const DataVisualizer3D = () => {
     return data;
   };
 
+  const detectCategoricalColumns = (data, headers) => {
+    const categorical = [];
+    headers.forEach(header => {
+      const uniqueValues = new Set(data.map(row => row[header]));
+      const sampleValue = data[0][header];
+      if (uniqueValues.size < 20 && typeof sampleValue === 'string') {
+        categorical.push(header);
+      }
+    });
+    return categorical;
+  };
+
   const calculateStatistics = (data) => {
     if (!data || data.length === 0) return null;
-    const values = data.map((d) => d.value);
+    const values = data.map(d => d.value);
     const sorted = [...values].sort((a, b) => a - b);
     const sum = values.reduce((a, b) => a + b, 0);
     const mean = sum / values.length;
@@ -70,13 +109,47 @@ const DataVisualizer3D = () => {
     const max = Math.max(...values);
     const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
     const stdDev = Math.sqrt(variance);
-    const outliers = data.filter((d) => Math.abs(d.value - mean) > 2 * stdDev);
+    const outliers = data.filter(d => Math.abs(d.value - mean) > 2 * stdDev);
     return { mean, median, min, max, stdDev, outliers: outliers.length, total: values.length };
+  };
+
+  const calculateCategoryStatistics = (data, categoryColumn) => {
+    if (!data || !categoryColumn || data.length === 0) return null;
+    const categories = {};
+    data.forEach(point => {
+      const cat = point.originalData?.[categoryColumn] || 'Unknown';
+      if (!categories[cat]) {
+        categories[cat] = [];
+      }
+      categories[cat].push(point.value);
+    });
+    const categoryStats = {};
+    Object.keys(categories).forEach((cat, index) => {
+      const values = categories[cat];
+      const sorted = [...values].sort((a, b) => a - b);
+      const sum = values.reduce((a, b) => a + b, 0);
+      const mean = sum / values.length;
+      const median = sorted[Math.floor(sorted.length / 2)];
+      const min = Math.min(...values);
+      const max = Math.max(...values);
+      const variance = values.reduce((sum, val) => sum + Math.pow(val - mean, 2), 0) / values.length;
+      const stdDev = Math.sqrt(variance);
+      categoryStats[cat] = {
+        mean,
+        median,
+        min,
+        max,
+        stdDev,
+        count: values.length,
+        color: categoryColors[index % categoryColors.length]
+      };
+    });
+    return categoryStats;
   };
 
   const parseCSV = (text) => {
     const lines = text.trim().split('\n');
-    const headers = lines[0].split(',').map((h) => h.trim());
+    const headers = lines[0].split(',').map(h => h.trim());
     const data = [];
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(',');
@@ -100,12 +173,16 @@ const DataVisualizer3D = () => {
       if (file.name.endsWith('.json')) {
         const jsonData = JSON.parse(content);
         const headers = Object.keys(jsonData[0] || {});
+        const categorical = detectCategoricalColumns(jsonData, headers);
         setAvailableColumns(headers);
+        setCategoricalColumns(categorical);
         setUploadedData(jsonData);
         setShowMapping(true);
       } else if (file.name.endsWith('.csv')) {
         const { headers, data } = parseCSV(content);
+        const categorical = detectCategoricalColumns(data, headers);
         setAvailableColumns(headers);
+        setCategoricalColumns(categorical);
         setUploadedData(data);
         setShowMapping(true);
       }
@@ -123,6 +200,7 @@ const DataVisualizer3D = () => {
       y: parseFloat(row[columnMapping.y]) || 0,
       z: parseFloat(row[columnMapping.z]) || idx,
       value: parseFloat(row[columnMapping.y]) || 0,
+      category: columnMapping.category ? row[columnMapping.category] : null,
       originalData: row,
     }));
     setCurrentData(mappedData);
@@ -130,17 +208,35 @@ const DataVisualizer3D = () => {
     setShowMapping(false);
     const stats = calculateStatistics(mappedData);
     setStatistics(stats);
+    if (columnMapping.category) {
+      const catStats = calculateCategoryStatistics(mappedData, columnMapping.category);
+      setCategoryStats(catStats);
+      setSelectedCategories(Object.keys(catStats));
+    }
+  };
+
+  const toggleCategory = (category) => {
+    setSelectedCategories(prev => {
+      if (prev.includes(category)) {
+        return prev.filter(c => c !== category);
+      } else {
+        return [...prev, category];
+      }
+    });
   };
 
   const getFilteredData = () => {
     let data = dataMode === 'uploaded' ? currentData : generateData(dataMode);
+    if (columnMapping.category && selectedCategories.length > 0) {
+      data = data.filter(d => selectedCategories.includes(d.originalData?.[columnMapping.category]));
+    }
     if (filterRange.min !== -Infinity || filterRange.max !== Infinity) {
-      data = data.filter((d) => d.value >= filterRange.min && d.value <= filterRange.max);
+      data = data.filter(d => d.value >= filterRange.min && d.value <= filterRange.max);
     }
     if (searchValue) {
       const searchNum = parseFloat(searchValue);
       if (!isNaN(searchNum)) {
-        data = data.filter((d) => Math.abs(d.value - searchNum) < 0.5);
+        data = data.filter(d => Math.abs(d.value - searchNum) < 0.5);
       }
     }
     return data;
@@ -192,6 +288,12 @@ const DataVisualizer3D = () => {
     link.click();
   };
 
+  const getCategoryColor = (point) => {
+    if (!columnMapping.category || !categoryStats) return null;
+    const cat = point.originalData?.[columnMapping.category];
+    return categoryStats[cat]?.color;
+  };
+
   // --- Three.js Setup & Visualization ---
   const createVisualization = (scene, mode, visMode) => {
     if (meshRef.current) {
@@ -199,13 +301,13 @@ const DataVisualizer3D = () => {
       if (meshRef.current.geometry) meshRef.current.geometry.dispose();
       if (meshRef.current.material) {
         if (Array.isArray(meshRef.current.material)) {
-          meshRef.current.material.forEach((m) => m.dispose());
+          meshRef.current.material.forEach(m => m.dispose());
         } else {
           meshRef.current.material.dispose();
         }
       }
       if (meshRef.current.children) {
-        meshRef.current.children.forEach((child) => {
+        meshRef.current.children.forEach(child => {
           if (child.geometry) child.geometry.dispose();
           if (child.material) child.material.dispose();
         });
@@ -243,10 +345,18 @@ const DataVisualizer3D = () => {
     for (let i = 0; i < data.length; i++) {
       const index = i * 3;
       positions[index + 2] = data[i].value;
-      const normalizedHeight = (data[i].value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
-      colors[index] = normalizedHeight;
-      colors[index + 1] = 0.5 - normalizedHeight * 0.3;
-      colors[index + 2] = 1 - normalizedHeight;
+      const categoryColor = getCategoryColor(data[i]);
+      if (categoryColor && columnMapping.category) {
+        const color = new THREE.Color(categoryColor);
+        colors[index] = color.r;
+        colors[index + 1] = color.g;
+        colors[index + 2] = color.b;
+      } else {
+        const normalizedHeight = (data[i].value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
+        colors[index] = normalizedHeight;
+        colors[index + 1] = 0.5 - normalizedHeight * 0.3;
+        colors[index + 2] = 1 - normalizedHeight;
+      }
     }
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     geometry.computeVertexNormals();
@@ -269,9 +379,15 @@ const DataVisualizer3D = () => {
       if (idx % 5 !== 0) return;
       const height = Math.abs(point.value) + 0.1;
       const geometry = new THREE.BoxGeometry(0.3, height, 0.3);
-      const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
-      const color = new THREE.Color();
-      color.setHSL(0.6 - normalizedHeight * 0.6, 1, 0.5);
+      let color;
+      const categoryColor = getCategoryColor(point);
+      if (categoryColor && columnMapping.category) {
+        color = new THREE.Color(categoryColor);
+      } else {
+        const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
+        color = new THREE.Color();
+        color.setHSL(0.6 - normalizedHeight * 0.6, 1, 0.5);
+      }
       const material = new THREE.MeshStandardMaterial({ color });
       const bar = new THREE.Mesh(geometry, material);
       bar.position.set((point.x - 25) * 0.2, height / 2, (point.z - 25) * 0.2);
@@ -290,11 +406,19 @@ const DataVisualizer3D = () => {
       positions[i * 3] = (point.x - 25) * 0.2;
       positions[i * 3 + 1] = point.value;
       positions[i * 3 + 2] = (point.z - 25) * 0.2;
-      const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
-      colors[i * 3] = normalizedHeight;
-      colors[i * 3 + 1] = 0.5;
-      colors[i * 3 + 2] = 1 - normalizedHeight;
-      sizes[i] = 0.1 + normalizedHeight * 0.2;
+      const categoryColor = getCategoryColor(point);
+      if (categoryColor && columnMapping.category) {
+        const color = new THREE.Color(categoryColor);
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      } else {
+        const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
+        colors[i * 3] = normalizedHeight;
+        colors[i * 3 + 1] = 0.5;
+        colors[i * 3 + 2] = 1 - normalizedHeight;
+      }
+      sizes[i] = 0.1 + Math.abs(point.value) * 0.02;
     });
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -316,12 +440,20 @@ const DataVisualizer3D = () => {
     const geometry = new THREE.PlaneGeometry(10, 10, size - 1, size - 1);
     const colors = new Float32Array(data.length * 3);
     data.forEach((point, i) => {
-      const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
-      const color = new THREE.Color();
-      color.setHSL(0.7 - normalizedHeight * 0.7, 1, 0.5);
-      colors[i * 3] = color.r;
-      colors[i * 3 + 1] = color.g;
-      colors[i * 3 + 2] = color.b;
+      const categoryColor = getCategoryColor(point);
+      if (categoryColor && columnMapping.category) {
+        const color = new THREE.Color(categoryColor);
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      } else {
+        const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
+        const color = new THREE.Color();
+        color.setHSL(0.7 - normalizedHeight * 0.7, 1, 0.5);
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      }
     });
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
     const material = new THREE.MeshBasicMaterial({
@@ -362,10 +494,18 @@ const DataVisualizer3D = () => {
       positions[i * 3] = (point.x - 25) * 0.2;
       positions[i * 3 + 1] = point.value;
       positions[i * 3 + 2] = (point.z - 25) * 0.2;
-      const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
-      colors[i * 3] = normalizedHeight;
-      colors[i * 3 + 1] = 0.7;
-      colors[i * 3 + 2] = 1 - normalizedHeight;
+      const categoryColor = getCategoryColor(point);
+      if (categoryColor && columnMapping.category) {
+        const color = new THREE.Color(categoryColor);
+        colors[i * 3] = color.r;
+        colors[i * 3 + 1] = color.g;
+        colors[i * 3 + 2] = color.b;
+      } else {
+        const normalizedHeight = (point.value - (statistics?.min || -3)) / ((statistics?.max || 3) - (statistics?.min || -3));
+        colors[i * 3] = normalizedHeight;
+        colors[i * 3 + 1] = 0.7;
+        colors[i * 3 + 2] = 1 - normalizedHeight;
+      }
     });
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -506,11 +646,12 @@ const DataVisualizer3D = () => {
     if (sceneRef.current) {
       createVisualization(sceneRef.current, dataMode, vizMode);
     }
-  }, [dataMode, vizMode, filterRange, searchValue, currentData]);
+  }, [dataMode, vizMode, filterRange, searchValue, currentData, selectedCategories]);
 
   // --- Render ---
   return (
     <div className="w-full h-screen bg-gray-950 relative overflow-hidden">
+      {/* Control Panel */}
       <div className="absolute top-4 left-4 z-10 bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-gray-700 shadow-2xl max-w-xs">
         <h2 className="text-xl font-bold text-white mb-3 flex items-center gap-2">
           <Maximize2 size={20} className="text-cyan-400" />
@@ -588,8 +729,19 @@ const DataVisualizer3D = () => {
             <Filter size={18} />
             Filters & Analysis
           </button>
+          {categoryStats && (
+            <button
+              onClick={() => setShowCategoryPanel(!showCategoryPanel)}
+              className="w-full px-4 py-2 bg-gradient-to-r from-pink-600 to-purple-600 hover:from-pink-700 hover:to-purple-700 text-white rounded font-medium flex items-center justify-center gap-2 transition-all text-sm"
+            >
+              <Layers size={18} />
+              Category Analysis
+            </button>
+          )}
         </div>
       </div>
+
+      {/* Statistics Panel */}
       {statistics && (
         <div className="absolute top-4 right-4 z-10 bg-gray-900/90 backdrop-blur-sm rounded-lg p-4 border border-gray-700 shadow-2xl max-w-xs">
           <div className="flex items-start gap-2 mb-2">
@@ -634,6 +786,101 @@ const DataVisualizer3D = () => {
           )}
         </div>
       )}
+
+      {/* Category Analysis Panel */}
+      {showCategoryPanel && categoryStats && (
+        <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 bg-gray-900/95 backdrop-blur-md rounded-lg p-6 border border-gray-700 shadow-2xl w-[500px] max-h-[80vh] overflow-y-auto">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-white font-bold text-lg flex items-center gap-2">
+              <Layers size={20} className="text-pink-400" />
+              Category Analysis
+            </h3>
+            <button
+              onClick={() => setShowCategoryPanel(false)}
+              className="text-gray-400 hover:text-white transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
+          <div className="mb-4 p-3 bg-gray-800 rounded">
+            <p className="text-gray-300 text-sm mb-2">
+              <strong>Column:</strong> {columnMapping.category}
+            </p>
+            <p className="text-gray-300 text-sm">
+              <strong>Total Categories:</strong> {Object.keys(categoryStats).length}
+            </p>
+          </div>
+          <div className="space-y-3">
+            {Object.entries(categoryStats).map(([category, stats]) => (
+              <div
+                key={category}
+                className="bg-gray-800 rounded-lg p-4 border-l-4 transition-all"
+                style={{ borderLeftColor: stats.color }}
+              >
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-4 h-4 rounded-full"
+                      style={{ backgroundColor: stats.color }}
+                    ></div>
+                    <h4 className="text-white font-semibold">{category}</h4>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => toggleCategory(category)}
+                      className={`px-3 py-1 rounded text-xs font-medium transition-all ${
+                        selectedCategories.includes(category)
+                          ? 'bg-green-600 text-white'
+                          : 'bg-gray-700 text-gray-300'
+                      }`}
+                    >
+                      {selectedCategories.includes(category) ? 'Visible' : 'Hidden'}
+                    </button>
+                    <button
+                      onClick={() => setExpandedCategory(expandedCategory === category ? null : category)}
+                      className="text-gray-400 hover:text-white transition-colors"
+                    >
+                      {expandedCategory === category ? (
+                        <ChevronUp size={18} />
+                      ) : (
+                        <ChevronDown size={18} />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-gray-300">
+                  <p>Count: <span className="text-cyan-400">{stats.count}</span></p>
+                  <p>Mean: <span className="text-cyan-400">{stats.mean.toFixed(2)}</span></p>
+                </div>
+                {expandedCategory === category && (
+                  <div className="mt-3 pt-3 border-t border-gray-700 grid grid-cols-2 gap-2 text-xs text-gray-300">
+                    <p>Median: <span className="text-cyan-400">{stats.median.toFixed(2)}</span></p>
+                    <p>Std Dev: <span className="text-yellow-400">{stats.stdDev.toFixed(2)}</span></p>
+                    <p>Min: <span className="text-green-400">{stats.min.toFixed(2)}</span></p>
+                    <p>Max: <span className="text-red-400">{stats.max.toFixed(2)}</span></p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="mt-4 flex gap-2">
+            <button
+              onClick={() => setSelectedCategories(Object.keys(categoryStats))}
+              className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded font-medium transition-all text-sm"
+            >
+              Show All
+            </button>
+            <button
+              onClick={() => setSelectedCategories([])}
+              className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded font-medium transition-all text-sm"
+            >
+              Hide All
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Export Panel */}
       <div className="absolute bottom-4 left-4 z-10 bg-gray-900/90 backdrop-blur-sm rounded-lg p-3 border border-gray-700 shadow-2xl">
         <div className="flex gap-2">
           <button
@@ -662,6 +909,8 @@ const DataVisualizer3D = () => {
           </button>
         </div>
       </div>
+
+      {/* Filter Panel */}
       {showFilters && (
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 bg-gray-900/95 backdrop-blur-md rounded-lg p-6 border border-gray-700 shadow-2xl w-96">
           <div className="flex items-center justify-between mb-4">
@@ -685,7 +934,7 @@ const DataVisualizer3D = () => {
                   placeholder="Min"
                   value={filterRange.min === -Infinity ? '' : filterRange.min}
                   onChange={(e) =>
-                    setFilterRange((prev) => ({ ...prev, min: e.target.value ? parseFloat(e.target.value) : -Infinity }))
+                    setFilterRange(prev => ({ ...prev, min: e.target.value ? parseFloat(e.target.value) : -Infinity }))
                   }
                   className="flex-1 bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
                 />
@@ -694,7 +943,7 @@ const DataVisualizer3D = () => {
                   placeholder="Max"
                   value={filterRange.max === Infinity ? '' : filterRange.max}
                   onChange={(e) =>
-                    setFilterRange((prev) => ({ ...prev, max: e.target.value ? parseFloat(e.target.value) : Infinity }))
+                    setFilterRange(prev => ({ ...prev, max: e.target.value ? parseFloat(e.target.value) : Infinity }))
                   }
                   className="flex-1 bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
                 />
@@ -769,11 +1018,13 @@ const DataVisualizer3D = () => {
           </div>
         </div>
       )}
+
+      {/* Column Mapping Modal */}
       {showMapping && (
         <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-20 bg-gray-900/95 backdrop-blur-md rounded-lg p-6 border border-gray-700 shadow-2xl w-96">
           <div className="flex items-center justify-between mb-4">
             <h3 className="text-white font-bold text-lg flex items-center gap-2">
-              <Grid3x3 size={20} className="text-cyan-400" />
+              <Grid size={20} className="text-cyan-400" />
               Map Columns to Axes
             </h3>
             <button
@@ -788,11 +1039,11 @@ const DataVisualizer3D = () => {
               <label className="text-gray-300 text-sm mb-2 block">X Axis</label>
               <select
                 value={columnMapping.x}
-                onChange={(e) => setColumnMapping((prev) => ({ ...prev, x: e.target.value }))}
+                onChange={(e) => setColumnMapping(prev => ({ ...prev, x: e.target.value }))}
                 className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
               >
                 <option value="">Select column...</option>
-                {availableColumns.map((col) => (
+                {availableColumns.map(col => (
                   <option key={col} value={col}>
                     {col}
                   </option>
@@ -803,11 +1054,11 @@ const DataVisualizer3D = () => {
               <label className="text-gray-300 text-sm mb-2 block">Y Axis (Value/Height)</label>
               <select
                 value={columnMapping.y}
-                onChange={(e) => setColumnMapping((prev) => ({ ...prev, y: e.target.value }))}
+                onChange={(e) => setColumnMapping(prev => ({ ...prev, y: e.target.value }))}
                 className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
               >
                 <option value="">Select column...</option>
-                {availableColumns.map((col) => (
+                {availableColumns.map(col => (
                   <option key={col} value={col}>
                     {col}
                   </option>
@@ -818,20 +1069,49 @@ const DataVisualizer3D = () => {
               <label className="text-gray-300 text-sm mb-2 block">Z Axis</label>
               <select
                 value={columnMapping.z}
-                onChange={(e) => setColumnMapping((prev) => ({ ...prev, z: e.target.value }))}
+                onChange={(e) => setColumnMapping(prev => ({ ...prev, z: e.target.value }))}
                 className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
               >
                 <option value="">Select column...</option>
-                {availableColumns.map((col) => (
+                {availableColumns.map(col => (
                   <option key={col} value={col}>
                     {col}
                   </option>
                 ))}
               </select>
             </div>
+            {categoricalColumns.length > 0 && (
+              <div className="pt-3 border-t border-gray-700">
+                <label className="text-gray-300 text-sm mb-2 block flex items-center gap-2">
+                  <Layers size={16} className="text-pink-400" />
+                  Category Column (Optional)
+                </label>
+                <select
+                  value={columnMapping.category}
+                  onChange={(e) => setColumnMapping(prev => ({ ...prev, category: e.target.value }))}
+                  className="w-full bg-gray-800 text-white px-3 py-2 rounded border border-gray-700 focus:border-cyan-500 focus:outline-none text-sm"
+                >
+                  <option value="">None</option>
+                  {categoricalColumns.map(col => (
+                    <option key={col} value={col}>
+                      {col}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Select a column to group data by categories
+                </p>
+              </div>
+            )}
             <div className="bg-gray-800 rounded p-3 text-xs text-gray-400">
               <p className="mb-1">📊 Available columns:</p>
               <p className="font-mono">{availableColumns.join(', ')}</p>
+              {categoricalColumns.length > 0 && (
+                <>
+                  <p className="mb-1 mt-2">🏷️ Categorical columns:</p>
+                  <p className="font-mono text-pink-400">{categoricalColumns.join(', ')}</p>
+                </>
+              )}
             </div>
             <button
               onClick={applyMapping}
@@ -842,6 +1122,7 @@ const DataVisualizer3D = () => {
           </div>
         </div>
       )}
+
       <div ref={mountRef} className="w-full h-full" />
       <div className="absolute bottom-0 left-0 right-0 h-32 bg-gradient-to-t from-gray-950 to-transparent pointer-events-none" />
     </div>
